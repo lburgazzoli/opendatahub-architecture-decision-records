@@ -88,7 +88,7 @@ flowchart TB
 
 **DatabaseProvider** (cluster-scoped, `infrastructure.opendatahub.io/v1alpha1`) describes where claims should be provisioned. Two types are supported:
 
-- **External**: points at an existing PostgreSQL instance managed by the administrator. The operator validates connectivity using an admin `Secret` and provisions claims against it, but does not manage the instance itself.
+- **External**: points at an existing PostgreSQL instance managed by the administrator. The operator validates connectivity using an admin `Secret` and provisions claims against it, but does not manage the instance itself. The provider configuration controls whether the operator is allowed to create databases and schemas, so administrators can restrict provisioning to only what their policies permit.
 - **Internal**: the platform deploys a single-instance PostgreSQL backend within the cluster as a convenience facility. It does not provide enterprise-grade capabilities (HA, automated backup/restore); customers requiring these should use an External provider.
 
 ```yaml
@@ -103,6 +103,8 @@ spec:
     connectionSecretRef:
       name: production-db-admin
       namespace: redhat-ai-databases
+    allowedOperations:
+      - SchemaCreation
 ```
 
 ```yaml
@@ -119,7 +121,7 @@ spec:
       size: 10Gi
 ```
 
-**SchemaClaim** (namespace-scoped) requests a dedicated schema and user within a shared database.
+**SchemaClaim** (namespace-scoped) requests a dedicated schema and user within a database. The claim can optionally specify a target database; if omitted, it uses the default database configured on the provider.
 
 ```yaml
 apiVersion: infrastructure.opendatahub.io/v1alpha1
@@ -130,12 +132,13 @@ metadata:
 spec:
   provider:
     name: rhai-db
+  database: ml_platform
   secretName: model-registry-db
   access: ReadWrite
   deletionPolicy: Retain
 ```
 
-**DatabaseClaim** (namespace-scoped) requests a dedicated user on a pre-existing database. The database must already exist. The operator provisions access but never creates or drops the database itself.
+**DatabaseClaim** (namespace-scoped) requests a dedicated database and user on the provider's PostgreSQL instance. If the database does not exist and the provider allows database creation, the operator creates it. If omitted, the default database configured on the provider is used.
 
 ```yaml
 apiVersion: infrastructure.opendatahub.io/v1alpha1
@@ -187,7 +190,7 @@ sequenceDiagram
 
     Note over Claim: Created by admin, component controller,<br/>or shipped as a default manifest
     Op->>DP: Resolve provider
-    Op->>PG: CREATE SCHEMA + CREATE ROLE + GRANT
+    Op->>PG: CREATE DATABASE/SCHEMA + CREATE ROLE + GRANT
     Op->>Secret: Write credentials via SSA
     Op->>Claim: Set Provisioned=True
 
@@ -250,7 +253,8 @@ When an administrator configures more than one `DatabaseProvider`, components mu
 Claims self-heal when their managed resources drift:
 
 - A missing credentials `Secret` triggers re-provisioning of the PostgreSQL role and a new `Secret` write (generating a new password in this case)
-- A missing schema (SchemaClaim) triggers schema recreation
+- A missing schema (`SchemaClaim`) triggers schema recreation
+- A missing database (`DatabaseClaim`) triggers database recreation if the provider allows it
 - A missing role triggers role recreation with a new password
 
 Repairs are performed during normal periodic reconciliation. The operator never silently drops data. `SchemaClaim` with `deletionPolicy: Retain` (the default) drops only the role on claim deletion; the schema and its data persist.
