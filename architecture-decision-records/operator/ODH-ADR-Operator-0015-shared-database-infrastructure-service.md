@@ -46,7 +46,7 @@ A unified database service addresses all three by giving administrators a common
 
 ## Non-Goals
 
-- Building a full database-as-a-service (HA, automated backup/restore, performance tuning, multi-engine support). The Internal backend is a convenience for getting started, not a production database platform; production workloads should use an External provider
+- Building a full database-as-a-service. The Internal backend does not include enterprise-grade capabilities (HA, automated backup/restore, performance tuning, multi-engine support); customers requiring these should use an External provider
 - Supporting database engines other than PostgreSQL in the initial version
 - Scheduled or user-initiated credential rotation workflows
 - Integration with external secret management systems (e.g., HashiCorp Vault) for credential generation and storage
@@ -89,7 +89,7 @@ flowchart TB
 **DatabaseProvider** (cluster-scoped, `infrastructure.opendatahub.io/v1alpha1`) describes where claims should be provisioned. Two types are supported:
 
 - **External**: points at an existing PostgreSQL instance managed by the administrator. The operator validates connectivity using an admin `Secret` and provisions claims against it, but does not manage the instance itself.
-- **Internal**: the platform deploys a single-instance PostgreSQL backend within the cluster as a convenience facility. This is not a supported production database; customers should use an External provider for production workloads.
+- **Internal**: the platform deploys a single-instance PostgreSQL backend within the cluster as a convenience facility. It does not provide enterprise-grade capabilities (HA, automated backup/restore); customers requiring these should use an External provider.
 
 ```yaml
 # External provider: administrator-managed PostgreSQL instance
@@ -219,7 +219,7 @@ Handling credential changes (e.g., after drift recovery generates a new password
 
 ### Internal Backend
 
-The Internal backend is a convenience facility that the platform ships to reduce initial setup friction. It is not a supported production database. Customers should use an External provider for production workloads.
+The Internal backend is a convenience facility that the platform ships to reduce initial setup friction. It does not provide enterprise-grade capabilities such as HA or automated backup/restore. Customers requiring these capabilities should use an External provider.
 
 When an Internal `DatabaseProvider` is created, the operator deploys a single-instance PostgreSQL backend within the cluster using a Red Hat supported image. The operator manages the full lifecycle of the backing resources and restricts network access to only namespaces with active provisioned claims.
 
@@ -297,7 +297,10 @@ Depend on a mature PostgreSQL operator for both instance lifecycle and access ma
   - *Mitigation*: adoption is incremental and opt-in; components adopt at their own pace, and the existing independent database path is preserved.
 - **Internal backend is single-instance with no HA.**
   - *Rationale*: a failure in the Internal backend's PostgreSQL pod affects all components using that provider.
-  - *Mitigation*: the Internal backend is a convenience facility, not a supported production database. Production environments should use an External provider pointing at an HA-capable PostgreSQL deployment.
+  - *Mitigation*: the Internal backend does not provide HA or automated failover by design. Environments requiring these capabilities should use an External provider pointing at an HA-capable PostgreSQL deployment.
+- **All components must support PostgreSQL.**
+  - *Rationale*: the shared service targets PostgreSQL exclusively. Components that currently use a different database engine or rely on engine-specific features must add PostgreSQL support to adopt the shared service.
+  - *Mitigation*: PostgreSQL is already the most common engine across OpenShift AI components. Components that cannot adopt PostgreSQL retain their independent database configuration path.
 - **PostgreSQL-only scope may not cover all component needs.**
   - *Rationale*: some components may have requirements better served by a different engine.
   - *Mitigation*: components with genuinely distinct requirements keep their own database configuration; this service targets the common case, and the API naming is engine-neutral to allow future expansion.
@@ -313,9 +316,9 @@ Depend on a mature PostgreSQL operator for both instance lifecycle and access ma
 - **The operator requires broad cluster privileges.**
   - *Rationale*: cross-namespace `Secret` management, cluster-scoped provider reconciliation, and database admin credentials represent a meaningful RBAC surface.
   - *Mitigation*: RBAC is scoped per-verb using Kubebuilder markers, and the operator follows the platform's existing module RBAC conventions. Security review should evaluate the privilege surface as part of the module onboarding process.
-- **Internal backend may be used in production despite being unsupported for that purpose.**
+- **Users may rely on the Internal backend without understanding it lacks enterprise-grade features.**
   - *Rationale*: the default provider is auto-created with a stable name and works out of the box, which makes it easy for users to normalize around it without switching to an External provider.
-  - *Mitigation*: documentation and status reporting should clearly communicate the limitations. The platform may surface warnings when the Internal backend is used beyond its intended scope.
+  - *Mitigation*: documentation and status reporting should clearly communicate that the Internal backend does not include HA, automated backup/restore, or other enterprise-grade capabilities. The platform may surface warnings when these features would be expected.
 - **Success depends on cross-organizational alignment.**
   - *Rationale*: adoption requires coordination across platform engineering, individual component teams, and customer database administrators, each with different priorities and constraints.
   - *Mitigation*: the opt-in model and preserved independent configuration path reduce the urgency of full alignment. Components can adopt incrementally without requiring all stakeholders to agree upfront.
