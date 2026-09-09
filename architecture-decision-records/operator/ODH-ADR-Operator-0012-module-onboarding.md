@@ -74,7 +74,7 @@ The ODH Operator acts as a meta-operator that manages module controllers through
 
 **ODH Operator Responsibilities:**
 - Manages the lifecycle (install, upgrade, uninstall) of module controllers
-- Deploys module controller manifests (Deployment, RBAC, CRDs)
+- Deploys the module controller's bootstrap manifest package, including the module's bootstrap ingress NetworkPolicies
 - Renders platform configuration into each module's ConfigMap
 - Prunes module resources when modules are disabled or removed
   - **DSC mode:** additionally creates and updates module CRs based on DataScienceCluster configuration, and aggregates status from module CRs back to the DataScienceCluster
@@ -111,7 +111,7 @@ See the [Module Onboarding Guide](design/module-onboarding-guide.md) for complet
 
 Helm is the preferred method for packaging module controller manifests. Kustomize is supported but switching to Helm is highly encouraged. Manifests are embedded in the ODH controller binary at build time, ensuring the operator is self-contained.
 
-The manifests that the ODH Operator installs for a module controller must be limited to core Kubernetes types (Deployment, ServiceAccount, RBAC, CRD). This constraint is driven by the principle of least privilege: the ODH Operator today operates with near cluster-admin permissions, and reducing its scope to core Kubernetes types only - with no knowledge of workload-specific CRDs - is a key goal of this architecture.
+The manifests that the ODH Operator installs for a module controller must be limited to core Kubernetes types (Deployment, ServiceAccount, RBAC, CRD), with one network-isolation exception: the module must also ship at least one bootstrap ingress `NetworkPolicy` as part of its module deployment package. ODH applies the package under the default-deny ingress baseline and checks that at least one module `NetworkPolicy` was deployed; the checking mechanism is an implementation detail. Once the module controller is successfully deployed and ready, responsibility for ongoing reconciliation of module-specific policies shifts to the module controller. This exception does not make ODH responsible for operand policies or other workload-specific resources; the module controller remains responsible for those resources.
 
 The module operator is the orchestrator for its feature area and should run as a separate Deployment from its operand controllers to maintain failure isolation and independent scaling. Common patterns include a single image with multiple entrypoints (recommended), multiple images when running upstream controllers alongside the module operator, or a single-process deployment for very simple modules.
 

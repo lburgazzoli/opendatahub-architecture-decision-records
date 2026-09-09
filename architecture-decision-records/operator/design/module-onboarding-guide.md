@@ -21,6 +21,9 @@ Acts as the central management interface. It does **not** manage the deep intern
 **Responsibility**
 
 * It deploys the **module controllers** (Deployment, RBAC, etc.).
+* Creates the module operator namespace and establishes its default-deny ingress policy. ODH derives the module's default namespace from the module's preferred namespace; if none is declared, it uses `redhat-ai-${module-name}-system`. A user may override this default through ODH operator configuration or environment variables. Namespace selection is not part of the Platform or PlatformModule CRDs because ODH must resolve it before configuring its cache and watch scope.
+* Ensures that each module operator has an individual system namespace. If the resolved namespace is already associated with another module, ODH reports the collision on the available Platform or PlatformModule CR, emits a Kubernetes event, and does not deploy or adopt the module there.
+* Applies module-provided bootstrap ingress NetworkPolicies and checks that at least one was deployed before considering the module ready.
 * Renders platform configuration (auth, TLS, observability, networking) into each module's **ConfigMap**.
 * Watches all the created resources (CRs, Deployments, etc.) having the **components.platform.opendatahub.io/managed-by** label.
 * Aggregates status from the module CRs.
@@ -159,9 +162,9 @@ This pattern follows established Kubernetes precedent: CoreDNS reads `coredns` C
 
 **Packaging:** Helm is the preferred method for packaging module controller manifests. Kustomize is supported but switching to Helm is highly encouraged. The ODH Operator renders manifests using **Helm** (template rendering only; advanced features such as hooks are not currently supported) or **Kustomize**.
 
-The ODH operator will only install the **module controller** manifests. The module repository must provide a directory containing **only** the **minimal set of artifacts** required to bootstrap the module controller. The manifests should strictly encompass the artifacts needed to **deploy and run the module controller** (e.g., the controller Deployment, its RBAC, and the Module CRD); do **not** include application-level manifests (e.g., ModelMesh Serving runtime, Dashboard UI Deployment). These manifests are **embedded** in the ODH controller binary at **build time**, ensuring the operator is self-contained and does not require runtime network access to fetch manifests.
+The ODH operator will only install the **module controller** bootstrap manifests. The module repository must provide a directory containing **only** the **minimal set of artifacts** required to bootstrap the module controller. The manifests should strictly encompass the artifacts needed to **deploy and run the module controller** (e.g., the controller Deployment, its RBAC, the Module CRD, and the bootstrap ingress NetworkPolicies); do **not** include application-level manifests (e.g., ModelMesh Serving runtime, Dashboard UI Deployment). These manifests are **embedded** in the ODH controller binary at **build time**, ensuring the operator is self-contained and does not require runtime network access to fetch manifests.
 
-**Minimal manifests interface:** The manifests that the ODH Operator installs must be limited to core Kubernetes types (Deployment, ServiceAccount, ClusterRole/ClusterRoleBinding, CRD). This constraint is driven by the principle of least privilege: the ODH Operator today operates with near cluster-admin permissions, and reducing its scope to core Kubernetes types only - with no knowledge of workload-specific CRDs - is a key goal of this architecture.
+**Minimal manifests interface:** The manifests that the ODH Operator installs must be limited to core Kubernetes types (Deployment, ServiceAccount, ClusterRole/ClusterRoleBinding, CRD), plus at least one module-provided bootstrap ingress `NetworkPolicy`. ODH applies the module deployment package under the default-deny ingress baseline and checks that at least one module `NetworkPolicy` was deployed. The exact checking mechanism is implementation-defined. ODH does not install or manage operand resources; those, including operand NetworkPolicies, are applied by the module controller.
 
 **Notes:**
 
@@ -199,6 +202,21 @@ Many modules require internal TLS certificates, particularly for **Admission Web
 ### **3.6 RBAC Permissions**
 
 Module controllers must follow the **principle of least privilege** when defining RBAC permissions. Controllers should request only the minimum permissions required to perform their specific functions. Avoid wildcard permissions (`*`) and prefer namespace-scoped permissions (Role/RoleBinding) over cluster-scoped (ClusterRole/ClusterRoleBinding) when possible.
+
+### **3.7 Ingress Network Policy Contract**
+
+Every module must ship at least one ingress `NetworkPolicy` as part of its module deployment package so that the module controller can operate under the ODH default-deny ingress baseline.
+
+The bootstrap sequence is:
+
+1. ODH creates the dedicated module operator namespace.
+2. ODH creates or reconciles the default-deny ingress policy.
+3. ODH applies the module deployment package and checks that at least one module `NetworkPolicy` was deployed.
+4. ODH deploys the module controller.
+
+If the module deployment does not result in at least one module `NetworkPolicy`, ODH must not consider the module ready. ODH reports the provisioning failure on whichever parent object is available—the Platform CR or PlatformModule CR—and emits Kubernetes events. During bootstrap, ODH owns the initial application of the module deployment package. Once the module controller is deployed and ready, ongoing reconciliation of module-specific ingress policies shifts to the module controller. Module-specific runtime conditions are then reported through the module CR status. The module controller remains responsible for reconciling ingress policies for its operands and for any additional, dedicated operand namespaces. Those namespaces must contain only resources belonging to the module or its operands and must use the same default-deny ingress model.
+
+This contract defines ingress policy only. Egress policy, metrics discovery, scrape configuration, and observability behavior are covered elsewhere.
 
 ## **4\. Integration with DataScienceCluster (DSC)**
 
@@ -321,11 +339,13 @@ spec:
 
 **ODH Operator Actions:**
 1. Detects `workbenches.managementState: Managed`
-2. Deploys Workbenches module controller resources:
+2. Creates the `opendatahub-workbenches` namespace and applies the default-deny ingress policy.
+3. Applies the Workbenches module's bootstrap ingress NetworkPolicies and checks that at least one was deployed.
+4. Deploys Workbenches module controller resources:
    - Workbenches CRD (`workbenches.components.platform.opendatahub.io`)
    - Workbenches module controller Deployment (`odh-workbenches-operator`)
    - ServiceAccount, ClusterRole, ClusterRoleBinding (RBAC)
-3. Injects platform configuration into Workbenches ConfigMap:
+5. Injects platform configuration into Workbenches ConfigMap:
    ```yaml
    apiVersion: v1
    kind: ConfigMap
